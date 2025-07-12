@@ -2,10 +2,12 @@ import streamlit as st
 import folium
 import pandas as pd
 from streamlit_folium import st_folium
+import numpy as np
 import logging
 from services.pharmacy_service import PharmacyService
 from services.storage_service import StorageService
 from utils.helpers import estimate_bounds, generate_pharmacies_key
+from itertools import product
 
 # Configurer les journaux
 logging.basicConfig(
