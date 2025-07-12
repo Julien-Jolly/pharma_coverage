@@ -7,9 +7,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-
 class PharmacyService:
-    """Service pour interagir avec l'API Google Places pour collecter les pharmacies."""
+    """Service pour interagir avec l'API Google Places (New) pour collecter les pharmacies."""
 
     def __init__(self):
         """Initialiser le service avec la clé API Google."""
@@ -20,7 +19,7 @@ class PharmacyService:
             raise ValueError("Clé API Google manquante")
 
     def get_pharmacies_in_subarea(self, center_lat, center_lon, radius):
-        """Collecter les pharmacies dans une sous-zone via Google Places API."""
+        """Collecter les pharmacies dans une sous-zone via Google Places API (New)."""
         pharmacies = []
         request_count = 0
         url = "https://places.googleapis.com/v1/places:searchNearby"
@@ -42,7 +41,7 @@ class PharmacyService:
         headers = {
             "Content-Type": "application/json",
             "X-Goog-Api-Key": self.api_key,
-            "X-Goog-FieldMask": "places.displayName,places.location"
+            "X-Goog-FieldMask": "places.displayName,places.location,places.formattedAddress"
         }
 
         try:
@@ -56,8 +55,10 @@ class PharmacyService:
                 lat = place["location"]["latitude"]
                 lon = place["location"]["longitude"]
                 name = place.get("displayName", {}).get("text", "Pharmacie sans nom")
+                address = place.get("formattedAddress", "Adresse inconnue")
                 pharmacies.append({
                     "name": name,
+                    "address": address,
                     "latitude": lat,
                     "longitude": lon
                 })
@@ -75,8 +76,10 @@ class PharmacyService:
                     lat = place["location"]["latitude"]
                     lon = place["location"]["longitude"]
                     name = place.get("displayName", {}).get("text", "Pharmacie sans nom")
+                    address = place.get("formattedAddress", "Adresse inconnue")
                     pharmacies.append({
                         "name": name,
+                        "address": address,
                         "latitude": lat,
                         "longitude": lon
                     })
@@ -92,34 +95,46 @@ class PharmacyService:
             if 'response' in locals() and response.text:
                 st.error(f"Détails de l'erreur : {response.text}")
                 logger.error(f"Détails de l'erreur : {response.text}")
+            return [], request_count
 
         return pharmacies, request_count
 
     def get_pharmacies_in_area(self, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius):
         """Collecter les pharmacies dans une zone donnée."""
-        pharmacies = []
-        total_requests = 0
+        try:
+            logger.info(f"Début de la recherche de pharmacies : bounds=({lat_min:.4f}, {lat_max:.4f}, {lon_min:.4f}, {lon_max:.4f}), step={subarea_step}, radius={subarea_radius}")
+            if not (lat_min < lat_max and lon_min < lon_max):
+                logger.error("Les limites de la zone sont invalides")
+                st.error("Les limites de la zone sont invalides. Vérifiez les coordonnées.")
+                return [], 0
 
-        lat_points = np.arange(lat_min, lat_max, subarea_step)
-        lon_points = np.arange(lon_min, lon_max, subarea_step)
-        subarea_centers = list(product(lat_points, lon_points))
+            pharmacies = []
+            total_requests = 0
+            lat_points = np.arange(lat_min, lat_max, subarea_step)
+            lon_points = np.arange(lon_min, lon_max, subarea_step)
+            subarea_centers = list(product(lat_points, lon_points))
 
-        st.write(f"Nombre de sous-zones à traiter : {len(subarea_centers)}")
-        logger.info(f"Collecte des pharmacies pour {len(subarea_centers)} sous-zones")
+            st.write(f"Nombre de sous-zones à traiter : {len(subarea_centers)}")
+            logger.info(f"Collecte des pharmacies pour {len(subarea_centers)} sous-zones")
 
-        for center_lat, center_lon in subarea_centers:
-            subarea_pharmacies, request_count = self.get_pharmacies_in_subarea(center_lat, center_lon, subarea_radius)
-            pharmacies.extend(subarea_pharmacies)
-            total_requests += request_count
+            for center_lat, center_lon in subarea_centers:
+                subarea_pharmacies, request_count = self.get_pharmacies_in_subarea(center_lat, center_lon, subarea_radius)
+                pharmacies.extend(subarea_pharmacies)
+                total_requests += request_count
 
-        unique_pharmacies = []
-        seen = set()
-        for p in pharmacies:
-            key = (p["latitude"], p["longitude"], p["name"])
-            if key not in seen:
-                seen.add(key)
-                unique_pharmacies.append(p)
+            unique_pharmacies = []
+            seen = set()
+            for p in pharmacies:
+                key = (p["latitude"], p["longitude"], p["name"])
+                if key not in seen:
+                    seen.add(key)
+                    unique_pharmacies.append(p)
 
-        st.write(f"Nombre total de requêtes effectuées pour la collecte : {total_requests}")
-        logger.info(f"Collecte terminée : {len(unique_pharmacies)} pharmacies uniques, {total_requests} requêtes")
-        return unique_pharmacies, total_requests
+            st.write(f"Nombre total de requêtes effectuées pour la collecte : {total_requests}")
+            logger.info(f"Collecte terminée : {len(unique_pharmacies)} pharmacies uniques, {total_requests} requêtes")
+            return unique_pharmacies, total_requests
+
+        except Exception as e:
+            st.error(f"Erreur inattendue lors de la recherche des pharmacies : {e}")
+            logger.error(f"Erreur inattendue lors de la recherche des pharmacies : {e}")
+            return [], 0

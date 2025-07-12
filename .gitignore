@@ -1,6 +1,30 @@
-.env
+# Fichiers Python compilés
+__pycache__/
+*.pyc
+
+# Environnement virtuel
 .venv/
+env/
+venv/
+.env
+
+# Fichiers de configuration locale
+.streamlit/secrets.toml
+
+# Fichiers de logs
+*.log
+
+# Fichiers temporaires
+*.swp
+*.swo
+*.swn
+
+# Fichiers d'éditeur
 .idea/
-*.json
-*.html
-.streamlit/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Fichiers système
+.DS_Store
+Thumbs.db
