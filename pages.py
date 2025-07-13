@@ -21,7 +21,7 @@ MINI_MAP_WIDTH = 300
 MINI_MAP_HEIGHT = 200
 MAX_AREA_KM2 = 4.0
 
-def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, height=MAP_HEIGHT, area_too_large=False, bounds=None, selected_pharmacies=None):
+def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, height=MAP_HEIGHT, selected_pharmacies=None):
     """Créer une carte Folium avec des cercles pour les pharmacies."""
     m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, width=width, height=height)
     selected_pharmacies = selected_pharmacies or []
@@ -37,18 +37,7 @@ def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, heigh
             opacity=CIRCLE_OPACITY,
             popup=pharmacy['name']
         ).add_to(m)
-    if area_too_large and bounds:
-        lat_min, lat_max, lon_min, lon_max = bounds
-        folium.Rectangle(
-            bounds=[[lat_min, lon_min], [lat_max, lon_max]],
-            color='red',
-            fill=True,
-            fill_color='red',
-            fill_opacity=0.2,
-            opacity=0.3,
-            popup="Zone trop grande"
-        ).add_to(m)
-    logger.info(f"Carte créée : {len(pharmacies)} cercles, center=({center_lat:.4f}, {center_lon:.4f}), zoom={zoom}, area_too_large={area_too_large}")
+    logger.info(f"Carte créée : {len(pharmacies)} cercles, center=({center_lat:.4f}, {center_lon:.4f}), zoom={zoom}")
     return m
 
 def _calculate_area_km2(lat_min, lat_max, lon_min, lon_max):
@@ -140,7 +129,8 @@ def _reset_search():
     st.session_state.subarea_step = None
     st.session_state.subarea_radius = None
     st.session_state.total_requests = 0
-    logger.info("État réinitialisé : search_in_progress=False, map=None, selected_pharmacies_key=None")
+    st.session_state.zone_validated = False
+    logger.info("État réinitialisé : search_in_progress=False, map=None, selected_pharmacies_key=None, zone_validated=False")
 
 def render_login_page(app):
     """Afficher la page de connexion."""
@@ -195,21 +185,25 @@ def render_selection_page(app):
             st.write(f"Crédits disponibles : {credits}")
         st.write("Ajustez la carte pour définir une zone de recherche (max 4 km² pour les utilisateurs non-admin).")
 
-        m = folium.Map(location=[st.session_state.map_center['lat'], st.session_state.map_center['lng']], zoom_start=st.session_state.map_zoom)
-        area_too_large = st.session_state.get('area_too_large', False)
-        if st.session_state.bounds and not st.session_state.is_admin:
-            lat_min, lat_max, lon_min, lon_max = st.session_state.bounds
-            area_km2 = _calculate_area_km2(lat_min, lat_max, lon_min, lon_max)
-            area_too_large = area_km2 > MAX_AREA_KM2
-            if area_too_large:
-                m = _create_map([], st.session_state.map_center['lat'], st.session_state.map_center['lng'], st.session_state.map_zoom, area_too_large=True, bounds=st.session_state.bounds)
-        map_data = st_folium(m, width=MAP_WIDTH, height=MAP_HEIGHT, key="selection_map")
-        logger.info(f"Données de la carte : center={map_data.get('center')}, zoom={map_data.get('zoom')}")
+        # Initialiser zone_validated si non défini
+        if 'zone_validated' not in st.session_state:
+            st.session_state.zone_validated = False
 
+        # Créer ou réutiliser la carte
+        if st.session_state.map is None:
+            st.session_state.map = folium.Map(
+                location=[st.session_state.map_center['lat'], st.session_state.map_center['lng']],
+                zoom_start=st.session_state.map_zoom,
+                width=MAP_WIDTH,
+                height=MAP_HEIGHT
+            )
+            logger.info(f"Carte initialisée pour Sélection : center={st.session_state.map_center}, zoom={st.session_state.map_zoom}")
+
+        map_data = st_folium(st.session_state.map, width=MAP_WIDTH, height=MAP_HEIGHT, key="selection_map")
         if map_data and "center" in map_data and "zoom" in map_data and map_data["center"] and map_data["zoom"]:
             st.session_state.map_center = map_data["center"]
             st.session_state.map_zoom = map_data["zoom"]
-            logger.info(f"Mise à jour : map_center={st.session_state.map_center}, map_zoom={st.session_state.map_zoom}")
+            logger.info(f"Interaction avec la carte : map_center={st.session_state.map_center}, map_zoom={st.session_state.map_zoom}")
 
         search_name = st.text_input("Nom de la recherche", placeholder="Entrez un nom unique pour la recherche")
         if search_name and not app.storage_service.is_search_name_unique(search_name, st.session_state.username):
@@ -217,6 +211,7 @@ def render_selection_page(app):
             logger.warning(f"Nom de recherche non unique : {search_name} pour {st.session_state.username}")
 
         if st.button("Valider la zone"):
+            logger.info("Clic sur Valider la zone")
             lat_min, lat_max, lon_min, lon_max = None, None, None, None
             if "bounds" in map_data and map_data["bounds"]:
                 try:
@@ -227,20 +222,21 @@ def render_selection_page(app):
                     lon_max = bounds["_northEast"]["lng"]
                     if lat_min < lat_max and lon_min < lon_max:
                         area_km2 = _calculate_area_km2(lat_min, lat_max, lon_min, lon_max)
-                        st.session_state.bounds = (lat_min, lat_max, lon_min, lon_max)
-                        st.session_state.area_too_large = not st.session_state.is_admin and area_km2 > MAX_AREA_KM2
                         if not st.session_state.is_admin and area_km2 > MAX_AREA_KM2:
                             st.error(f"Erreur : la zone est trop grande ({area_km2:.2f} km²). Limitez à {MAX_AREA_KM2} km².")
                             logger.error(f"Zone trop grande : {area_km2:.2f} km²")
+                            st.session_state.zone_validated = False
                         else:
+                            st.session_state.bounds = (lat_min, lat_max, lon_min, lon_max)
+                            st.session_state.zone_validated = True
                             st.write(f"Zone validée : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
                                      f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f} ({area_km2:.2f} km²)")
                             logger.info(f"Zone validée : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
                                         f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f}, area={area_km2:.2f} km²")
-                        st.session_state.search_in_progress = False
                     else:
                         st.error("Erreur : les coordonnées de la zone sont invalides.")
                         logger.error("Coordonnées de la zone invalides")
+                        st.session_state.zone_validated = False
                 except (KeyError, TypeError) as e:
                     logger.warning(f"Erreur lors de la récupération des limites : {e}")
                     center = map_data.get("center", st.session_state.map_center)
@@ -248,12 +244,12 @@ def render_selection_page(app):
                     lat_min, lat_max, lon_min, lon_max = estimate_bounds(center["lat"], center["lng"], zoom)
                     area_km2 = _calculate_area_km2(lat_min, lat_max, lon_min, lon_max)
                     if not st.session_state.is_admin and area_km2 > MAX_AREA_KM2:
-                        st.session_state.area_too_large = True
                         st.error(f"Erreur : la zone estimée est trop grande ({area_km2:.2f} km²). Limitez à {MAX_AREA_KM2} km².")
                         logger.error(f"Zone estimée trop grande : {area_km2:.2f} km²")
+                        st.session_state.zone_validated = False
                     else:
-                        st.session_state.area_too_large = False
                         st.session_state.bounds = (lat_min, lat_max, lon_min, lon_max)
+                        st.session_state.zone_validated = True
                         st.write(f"Zone validée (estimée) : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
                                  f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f} ({area_km2:.2f} km²)")
                         logger.info(f"Zone validée (estimée) : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
@@ -261,20 +257,27 @@ def render_selection_page(app):
             else:
                 st.error("Erreur : impossible de récupérer la zone visible. Ajustez la carte et réessayez.")
                 logger.error("Impossible de récupérer la zone visible")
-                st.session_state.area_too_large = False
+                st.session_state.zone_validated = False
+            st.rerun()
 
-        if st.session_state.bounds and not st.session_state.area_too_large:
+        if st.session_state.zone_validated and st.session_state.bounds:
             lat_min, lat_max, lon_min, lon_max = st.session_state.bounds
             if lat_min < lat_max and lon_min < lon_max:
                 subarea_step = 0.01
                 subarea_radius = 1000
-                estimated_subareas = len(list(product(
-                    np.arange(lat_min, lat_max, subarea_step),
-                    np.arange(lon_min, lon_max, subarea_step)
-                )))
-                st.write(f"Cette recherche peut générer ~{estimated_subareas} requêtes, coût estimé : 1 crédit")
-                logger.info(f"Estimation : {estimated_subareas} sous-zones, coût 1 crédit")
+                try:
+                    estimated_subareas = len(list(product(
+                        np.arange(lat_min, lat_max, subarea_step),
+                        np.arange(lon_min, lon_max, subarea_step)
+                    )))
+                    st.write(f"Cette recherche peut générer ~{estimated_subareas} requêtes, coût estimé : 1 crédit")
+                    logger.info(f"Estimation : {estimated_subareas} sous-zones, coût 1 crédit")
+                except Exception as e:
+                    st.error(f"Erreur lors de l'estimation des sous-zones : {e}")
+                    logger.error(f"Erreur dans product : {e}")
+                    estimated_subareas = 0
                 if st.button("Lancer la recherche", disabled=(not search_name or not app.storage_service.is_search_name_unique(search_name, st.session_state.username) or (not st.session_state.is_admin and app.user_service.get_user_credits(st.session_state.username) < 1))):
+                    logger.info("Clic sur Lancer la recherche")
                     _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, search_name, st.session_state.username)
                     st.rerun()
 
