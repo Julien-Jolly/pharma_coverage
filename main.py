@@ -33,7 +33,6 @@ MAP_HEIGHT = 600
 MINI_MAP_WIDTH = 300
 MINI_MAP_HEIGHT = 200
 MAX_AREA_KM2 = 4.0
-NON_COVERED_RADIUS = 100
 
 class PharmacyApp:
     """Application Streamlit pour la recherche de pharmacies et gestion des utilisateurs."""
@@ -76,7 +75,6 @@ class PharmacyApp:
             'search_type': None,
             'search_name': None,
             'pharmacies': [],
-            'non_covered_points': [],
             'total_requests': 0,
             'selected_pharmacies': [],
             'subarea_step': None,
@@ -86,6 +84,23 @@ class PharmacyApp:
         for key, value in defaults.items():
             if key not in st.session_state:
                 st.session_state[key] = value
+
+    def _reset_map_state(self):
+        """Réinitialiser les variables de session liées à la carte."""
+        st.session_state.map = None
+        st.session_state.bounds = None
+        st.session_state.area_too_large = False
+        st.session_state.selected_pharmacies = []
+        st.session_state.selected_pharmacies_key = None
+        st.session_state.pharmacies = []
+        st.session_state.search_name = None
+        st.session_state.search_type = None
+        st.session_state.subarea_step = None
+        st.session_state.subarea_radius = None
+        st.session_state.total_requests = 0
+        st.session_state.map_center = DEFAULT_CENTER
+        st.session_state.map_zoom = DEFAULT_ZOOM
+        logger.info("État de la carte réinitialisé")
 
     def run(self):
         """Lancer l'application avec navigation et gestion de l'état."""
@@ -134,6 +149,7 @@ class PharmacyApp:
                 font-size: 18px;
                 font-weight: bold;
             }
+            .st-folium-map { z-index: 1; }
             </style>
         """, unsafe_allow_html=True)
 
@@ -143,9 +159,16 @@ class PharmacyApp:
             page_options = ["Sélection de la zone", "Résultats", "Historique"]
             if st.session_state.is_admin:
                 page_options.extend(["Facturation", "Gestion des utilisateurs"])
-            st.session_state.page = st.sidebar.selectbox("Naviguer", page_options, index=page_options.index(st.session_state.page))
+            current_page = st.session_state.page
+            new_page = st.sidebar.selectbox("Naviguer", page_options, index=page_options.index(current_page), key="nav_select")
+            if new_page != current_page:
+                logger.info(f"Tentative de changement de page : de {current_page} à {new_page}")
+                if new_page == "Sélection de la zone":
+                    self._reset_map_state()
+                st.session_state.page = new_page
+                st.rerun()
+
             if st.sidebar.button("Déconnexion"):
-                # Réinitialiser l'état de la session
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
                 st.session_state.is_authenticated = False
