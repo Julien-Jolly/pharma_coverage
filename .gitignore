@@ -24,6 +24,8 @@ venv/
 .vscode/
 *.sublime-project
 *.sublime-workspace
+*.html
+app.log
 
 # Fichiers système
 .DS_Store

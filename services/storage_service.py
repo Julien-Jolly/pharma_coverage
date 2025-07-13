@@ -59,11 +59,9 @@ class StorageService:
             if user_id:
                 filtered_history = []
                 for entry in history:
-                    if 'user_id' in entry:
-                        if entry['user_id'] == user_id:
-                            filtered_history.append(entry)
-                    else:
-                        logger.warning(f"Entrée d'historique sans 'user_id' détectée : {entry}")
+                    entry_user_id = entry.get('user_id')
+                    if entry_user_id == user_id or (user_id == "admin" and entry_user_id is None):
+                        filtered_history.append(entry)
                 history = filtered_history
             logger.info(f"Historique chargé : {len(history)} recherches" + (
                 f" pour l'utilisateur {user_id}" if user_id else ""))
@@ -104,8 +102,15 @@ class StorageService:
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key="request_count.json")
             counts = json.loads(response['Body'].read().decode('utf-8'))
             if user_id:
-                return counts.get(user_id, {}).get('total_requests', 0)
-            return sum(data['total_requests'] for data in counts.values())
+                data = counts.get(user_id, {})
+                return data.get('total_requests', 0) if isinstance(data, dict) else data
+            total = 0
+            for data in counts.values():
+                if isinstance(data, dict):
+                    total += data.get('total_requests', 0)
+                else:
+                    total += data  # Gérer les anciens formats où data est un entier
+            return total
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 logger.warning("Fichier request_count.json introuvable, création d'un fichier vide")
@@ -119,6 +124,8 @@ class StorageService:
         for attempt in range(3):
             try:
                 counts = self.load_request_count()
+                if user_id in counts and isinstance(counts[user_id], int):
+                    counts[user_id] = {'total_requests': counts[user_id]}
                 counts[user_id] = counts.get(user_id, {'total_requests': 0})
                 counts[user_id]['total_requests'] += num_requests
                 self.save_request_count(counts)
