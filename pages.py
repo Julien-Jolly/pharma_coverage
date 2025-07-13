@@ -7,6 +7,7 @@ import numpy as np
 from datetime import datetime
 import logging
 from utils.helpers import estimate_bounds, generate_pharmacies_key
+from geopy.geocoders import Nominatim
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,18 @@ MAP_HEIGHT = 600
 MINI_MAP_WIDTH = 300
 MINI_MAP_HEIGHT = 200
 MAX_AREA_KM2 = 4.0
+
+def _geocode_location(location):
+    """Géocoder une localité en coordonnées latitude/longitude en utilisant Nominatim."""
+    try:
+        geolocator = Nominatim(user_agent="pharmacy_coverage_app")
+        location_data = geolocator.geocode(location)
+        if location_data:
+            return {'lat': location_data.latitude, 'lng': location_data.longitude}
+        return None
+    except Exception as e:
+        logger.error(f"Erreur de géocodage pour {location} : {e}")
+        return None
 
 def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, height=MAP_HEIGHT, selected_pharmacies=None):
     """Créer une carte Folium avec des cercles pour les pharmacies."""
@@ -56,28 +69,28 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
         st.session_state.subarea_step = subarea_step
         st.session_state.subarea_radius = subarea_radius
         st.session_state.search_in_progress = True
-        st.write("Recherche en cours...")
+        st.sidebar.write("Recherche en cours...")
 
         pharmacies, total_requests = app.pharmacy_service.get_pharmacies_in_area(
             lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius
         )
         if not pharmacies:
-            st.error("Aucune pharmacie trouvée. Vérifiez votre clé API ou la zone.")
+            st.sidebar.error("Aucune pharmacie trouvée. Vérifiez votre clé API ou la zone.")
             logger.error("Aucune pharmacie trouvée")
-            st.write("Vérifiez sur https://www.google.com/maps en recherchant 'pharmacy'.")
+            st.sidebar.write("Vérifiez sur https://www.google.com/maps en recherchant 'pharmacy'.")
             _reset_search()
         else:
             st.session_state.pharmacies = pharmacies
             st.session_state.total_requests = total_requests
             center_lat = (lat_min + lat_max) / 2
             center_lon = (lon_min + lon_max) / 2
+            st.session_state.selected_pharmacies = pharmacies  # Cocher toutes les pharmacies par défaut
+            st.session_state.selected_pharmacies_key = generate_pharmacies_key(pharmacies)
             st.session_state.map = _create_map(
                 pharmacies, center_lat, center_lon, st.session_state.map_zoom,
                 selected_pharmacies=st.session_state.selected_pharmacies
             )
             st.session_state.map_center = {'lat': center_lat, 'lng': center_lon}
-            st.session_state.selected_pharmacies = []
-            st.session_state.selected_pharmacies_key = generate_pharmacies_key([])
             search_data = {
                 "name": search_name,
                 "user_id": user_id,
@@ -99,7 +112,7 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
                 if current_credits >= 1:
                     app.user_service.update_credits(user_id, current_credits - 1)
                 else:
-                    st.error("Erreur : crédits insuffisants pour cette recherche.")
+                    st.sidebar.error("Erreur : crédits insuffisants pour cette recherche.")
                     logger.error(f"Crédits insuffisants pour {user_id}")
                     _reset_search()
                     return
@@ -111,7 +124,7 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
             st.session_state.page = "Résultats"
             logger.info(f"Recherche terminée : {len(pharmacies)} pharmacies trouvées, {total_requests} requêtes, 1 crédit déduit")
     except Exception as e:
-        st.error(f"Erreur lors du lancement de la recherche : {e}")
+        st.sidebar.error(f"Erreur lors du lancement de la recherche : {e}")
         logger.error(f"Erreur lors du lancement de la recherche : {e}")
         _reset_search()
 
@@ -121,7 +134,6 @@ def _reset_search():
     st.session_state.page = "Sélection de la zone"
     st.session_state.map = None
     st.session_state.selected_pharmacies_key = None
-    st.session_state.area_too_large = False
     st.session_state.selected_pharmacies = []
     st.session_state.pharmacies = []
     st.session_state.search_name = None
@@ -180,16 +192,39 @@ def render_selection_page(app):
     """Afficher la page de sélection de la zone de recherche."""
     with st.container():
         st.header("Sélection de la zone de recherche")
-        if not st.session_state.is_admin:
-            credits = app.user_service.get_user_credits(st.session_state.username)
-            st.write(f"Crédits disponibles : {credits}")
-        st.write("Ajustez la carte pour définir une zone de recherche (max 4 km² pour les utilisateurs non-admin).")
+        with st.sidebar:
+            st.markdown("### Recherche de zone")
+            if not st.session_state.is_admin:
+                credits = app.user_service.get_user_credits(st.session_state.username)
+                st.write(f"**Crédits disponibles** : {credits}")
+            st.markdown("Ajustez la carte pour définir une zone de recherche (max 4 km² pour les utilisateurs non-admin).")
+            st.markdown("<hr>", unsafe_allow_html=True)
 
-        # Initialiser zone_validated si non défini
-        if 'zone_validated' not in st.session_state:
-            st.session_state.zone_validated = False
+            # Barre de recherche pour localité
+            location = st.text_input("Rechercher une localité", placeholder="Ex. Casablanca, Maroc")
+            if st.button("Rechercher"):
+                if location:
+                    logger.info(f"Recherche de localité : {location}")
+                    coords = _geocode_location(location)
+                    if coords and 'lat' in coords and 'lng' in coords:
+                        st.session_state.map_center = {'lat': coords['lat'], 'lng': coords['lng']}
+                        st.session_state.map_zoom = DEFAULT_ZOOM
+                        st.session_state.map = None  # Forcer la régénération de la carte
+                        logger.info(f"Localité trouvée : center={st.session_state.map_center}, zoom={st.session_state.map_zoom}")
+                        st.rerun()
+                    else:
+                        st.error("Localité non trouvée. Vérifiez l'orthographe ou essayez une autre adresse.")
+                        logger.error(f"Échec de géocodage pour : {location}")
+            st.markdown("<hr>", unsafe_allow_html=True)
 
-        # Créer ou réutiliser la carte
+            # Nom de la recherche et boutons
+            st.markdown("### Paramètres de recherche")
+            search_name = st.text_input("Nom de la recherche", placeholder="Entrez un nom unique pour la recherche")
+            if search_name and not app.storage_service.is_search_name_unique(search_name, st.session_state.username):
+                st.error("Erreur : ce nom de recherche existe déjà. Choisissez un nom unique.")
+                logger.warning(f"Nom de recherche non unique : {search_name} pour {st.session_state.username}")
+
+        # Initialiser et afficher la carte
         if st.session_state.map is None:
             st.session_state.map = folium.Map(
                 location=[st.session_state.map_center['lat'], st.session_state.map_center['lng']],
@@ -200,47 +235,62 @@ def render_selection_page(app):
             logger.info(f"Carte initialisée pour Sélection : center={st.session_state.map_center}, zoom={st.session_state.map_zoom}")
 
         map_data = st_folium(st.session_state.map, width=MAP_WIDTH, height=MAP_HEIGHT, key="selection_map")
-        if map_data and "center" in map_data and "zoom" in map_data and map_data["center"] and map_data["zoom"]:
+
+        # Mettre à jour le centre et le zoom si disponibles
+        if map_data and isinstance(map_data, dict) and "center" in map_data and "zoom" in map_data and map_data["center"]:
             st.session_state.map_center = map_data["center"]
             st.session_state.map_zoom = map_data["zoom"]
-            logger.info(f"Interaction avec la carte : map_center={st.session_state.map_center}, map_zoom={st.session_state.map_zoom}")
+            logger.info(f"Interaction avec la carte : map_center={st.session_state.map_center}, zoom={st.session_state.map_zoom}")
 
-        search_name = st.text_input("Nom de la recherche", placeholder="Entrez un nom unique pour la recherche")
-        if search_name and not app.storage_service.is_search_name_unique(search_name, st.session_state.username):
-            st.error("Erreur : ce nom de recherche existe déjà. Choisissez un nom unique.")
-            logger.warning(f"Nom de recherche non unique : {search_name} pour {st.session_state.username}")
-
-        if st.button("Valider la zone"):
-            logger.info("Clic sur Valider la zone")
-            lat_min, lat_max, lon_min, lon_max = None, None, None, None
-            if "bounds" in map_data and map_data["bounds"]:
-                try:
-                    bounds = map_data["bounds"]
-                    lat_min = bounds["_southWest"]["lat"]
-                    lat_max = bounds["_northEast"]["lat"]
-                    lon_min = bounds["_southWest"]["lng"]
-                    lon_max = bounds["_northEast"]["lng"]
-                    if lat_min < lat_max and lon_min < lon_max:
+        # Gestion du bouton Valider la zone
+        with st.sidebar:
+            if st.button("Valider la zone"):
+                logger.info("Clic sur Valider la zone")
+                lat_min, lat_max, lon_min, lon_max = None, None, None, None
+                if map_data and isinstance(map_data, dict) and "bounds" in map_data and map_data["bounds"]:
+                    try:
+                        bounds = map_data["bounds"]
+                        lat_min = bounds["_southWest"]["lat"]
+                        lat_max = bounds["_northEast"]["lat"]
+                        lon_min = bounds["_southWest"]["lng"]
+                        lon_max = bounds["_northEast"]["lng"]
+                        if lat_min < lat_max and lon_min < lon_max:
+                            area_km2 = _calculate_area_km2(lat_min, lat_max, lon_min, lon_max)
+                            if not st.session_state.is_admin and area_km2 > MAX_AREA_KM2:
+                                st.error(f"Erreur : la zone est trop grande ({area_km2:.2f} km²). Limitez à {MAX_AREA_KM2} km².")
+                                logger.error(f"Zone trop grande : {area_km2:.2f} km²")
+                                st.session_state.zone_validated = False
+                            else:
+                                st.session_state.bounds = (lat_min, lat_max, lon_min, lon_max)
+                                st.session_state.zone_validated = True
+                                st.write(f"Zone validée : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
+                                         f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f} ({area_km2:.2f} km²)")
+                                logger.info(f"Zone validée : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
+                                            f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f}, area={area_km2:.2f} km²")
+                        else:
+                            st.error("Erreur : les coordonnées de la zone sont invalides.")
+                            logger.error("Coordonnées de la zone invalides")
+                            st.session_state.zone_validated = False
+                    except (KeyError, TypeError) as e:
+                        logger.warning(f"Erreur lors de la récupération des limites : {e}")
+                        center = map_data.get("center", st.session_state.map_center)
+                        zoom = map_data.get("zoom", st.session_state.map_zoom)
+                        lat_min, lat_max, lon_min, lon_max = estimate_bounds(center["lat"], center["lng"], zoom)
                         area_km2 = _calculate_area_km2(lat_min, lat_max, lon_min, lon_max)
                         if not st.session_state.is_admin and area_km2 > MAX_AREA_KM2:
-                            st.error(f"Erreur : la zone est trop grande ({area_km2:.2f} km²). Limitez à {MAX_AREA_KM2} km².")
-                            logger.error(f"Zone trop grande : {area_km2:.2f} km²")
+                            st.error(f"Erreur : la zone estimée est trop grande ({area_km2:.2f} km²). Limitez à {MAX_AREA_KM2} km².")
+                            logger.error(f"Zone estimée trop grande : {area_km2:.2f} km²")
                             st.session_state.zone_validated = False
                         else:
                             st.session_state.bounds = (lat_min, lat_max, lon_min, lon_max)
                             st.session_state.zone_validated = True
-                            st.write(f"Zone validée : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
+                            st.write(f"Zone validée (estimée) : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
                                      f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f} ({area_km2:.2f} km²)")
-                            logger.info(f"Zone validée : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
-                                        f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f}, area={area_km2:.2f} km²")
-                    else:
-                        st.error("Erreur : les coordonnées de la zone sont invalides.")
-                        logger.error("Coordonnées de la zone invalides")
-                        st.session_state.zone_validated = False
-                except (KeyError, TypeError) as e:
-                    logger.warning(f"Erreur lors de la récupération des limites : {e}")
-                    center = map_data.get("center", st.session_state.map_center)
-                    zoom = map_data.get("zoom", st.session_state.map_zoom)
+                            logger.info(f"Zone validée (estimée) : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
+                                        f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f}")
+                else:
+                    center = st.session_state.map_center
+                    zoom = st.session_state.map_zoom
                     lat_min, lat_max, lon_min, lon_max = estimate_bounds(center["lat"], center["lng"], zoom)
                     area_km2 = _calculate_area_km2(lat_min, lat_max, lon_min, lon_max)
                     if not st.session_state.is_admin and area_km2 > MAX_AREA_KM2:
@@ -254,32 +304,28 @@ def render_selection_page(app):
                                  f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f} ({area_km2:.2f} km²)")
                         logger.info(f"Zone validée (estimée) : lat_min={lat_min:.4f}, lat_max={lat_max:.4f}, "
                                     f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f}")
-            else:
-                st.error("Erreur : impossible de récupérer la zone visible. Ajustez la carte et réessayez.")
-                logger.error("Impossible de récupérer la zone visible")
-                st.session_state.zone_validated = False
-            st.rerun()
+                st.rerun()
 
-        if st.session_state.zone_validated and st.session_state.bounds:
-            lat_min, lat_max, lon_min, lon_max = st.session_state.bounds
-            if lat_min < lat_max and lon_min < lon_max:
-                subarea_step = 0.01
-                subarea_radius = 1000
-                try:
-                    estimated_subareas = len(list(product(
-                        np.arange(lat_min, lat_max, subarea_step),
-                        np.arange(lon_min, lon_max, subarea_step)
-                    )))
-                    st.write(f"Cette recherche peut générer ~{estimated_subareas} requêtes, coût estimé : 1 crédit")
-                    logger.info(f"Estimation : {estimated_subareas} sous-zones, coût 1 crédit")
-                except Exception as e:
-                    st.error(f"Erreur lors de l'estimation des sous-zones : {e}")
-                    logger.error(f"Erreur dans product : {e}")
-                    estimated_subareas = 0
-                if st.button("Lancer la recherche", disabled=(not search_name or not app.storage_service.is_search_name_unique(search_name, st.session_state.username) or (not st.session_state.is_admin and app.user_service.get_user_credits(st.session_state.username) < 1))):
-                    logger.info("Clic sur Lancer la recherche")
-                    _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, search_name, st.session_state.username)
-                    st.rerun()
+            if st.session_state.zone_validated and st.session_state.bounds:
+                lat_min, lat_max, lon_min, lon_max = st.session_state.bounds
+                if lat_min < lat_max and lon_min < lon_max:
+                    subarea_step = 0.01
+                    subarea_radius = 1000
+                    try:
+                        estimated_subareas = len(list(product(
+                            np.arange(lat_min, lat_max, subarea_step),
+                            np.arange(lon_min, lon_max, subarea_step)
+                        )))
+                        st.write(f"Cette recherche peut générer ~{estimated_subareas} requêtes, coût estimé : 1 crédit")
+                        logger.info(f"Estimation : {estimated_subareas} sous-zones, coût 1 crédit")
+                    except Exception as e:
+                        st.error(f"Erreur lors de l'estimation des sous-zones : {e}")
+                        logger.error(f"Erreur dans product : {e}")
+                        estimated_subareas = 0
+                    if st.button("Lancer la recherche", disabled=(not search_name or not app.storage_service.is_search_name_unique(search_name, st.session_state.username) or (not st.session_state.is_admin and app.user_service.get_user_credits(st.session_state.username) < 1))):
+                        logger.info("Clic sur Lancer la recherche")
+                        _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, search_name, st.session_state.username)
+                        st.rerun()
 
 def render_results_page(app):
     """Afficher la page des résultats."""
@@ -289,7 +335,7 @@ def render_results_page(app):
 
         required_keys = ["bounds", "search_type", "pharmacies", "total_requests", "search_name"]
         if not all(key in st.session_state and st.session_state[key] is not None for key in required_keys):
-            st.error("Aucune recherche récente disponible. Retournez à la page de sélection pour lancer une recherche.")
+            st.sidebar.error("Aucune recherche récente disponible. Retournez à la page de sélection pour lancer une recherche.")
             logger.error("Données de recherche manquantes pour afficher les résultats")
             st.session_state.page = "Sélection de la zone"
             app._reset_map_state()
@@ -302,89 +348,133 @@ def render_results_page(app):
                     f"lon_min={lon_min:.4f}, lon_max={lon_max:.4f}, "
                     f"step={st.session_state.subarea_step}, radius={st.session_state.subarea_radius}")
 
-        st.write(f"Nom de la recherche : {search_name}")
-        st.write(f"Nombre total de pharmacies trouvées : {len(st.session_state.pharmacies)}")
-        if st.session_state.is_admin:
-            st.write(f"Nombre total de requêtes effectuées : {st.session_state.total_requests}")
+        with st.sidebar:
+            st.markdown("### Résultats de la recherche")
+            st.write(f"**Nom de la recherche** : {search_name}")
+            st.write(f"**Nombre total de pharmacies trouvées** : {len(st.session_state.pharmacies)}")
+            if st.session_state.is_admin:
+                st.write(f"**Nombre total de requêtes effectuées** : {st.session_state.total_requests}")
+            st.markdown("<hr>", unsafe_allow_html=True)
 
-        with st.container():
-            if st.session_state.map is None:
+            with st.expander("Pharmacies trouvées", expanded=True):
+                st.markdown(
+                    """
+                    <style>
+                    .pharmacy-list {
+                        max-height: 300px;
+                        overflow-y: auto;
+                        padding: 10px;
+                        border: 1px solid #ccc;
+                        border-radius: 5px;
+                        background-color: #f9f9f9;
+                    }
+                    </style>
+                    """,
+                    unsafe_allow_html=True
+                )
+                with st.container():
+                    st.markdown('<div class="pharmacy-list">', unsafe_allow_html=True)
+                    selected_pharmacies = []
+                    for i, pharmacy in enumerate(st.session_state.pharmacies):
+                        if st.checkbox(pharmacy['name'], key=f"pharmacy_{i}_{st.session_state.selected_pharmacies_key}", value=pharmacy in st.session_state.selected_pharmacies):
+                            selected_pharmacies.append(pharmacy)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Tout cocher"):
+                        st.session_state.selected_pharmacies = st.session_state.pharmacies
+                        st.session_state.selected_pharmacies_key = generate_pharmacies_key(st.session_state.pharmacies)
+                        st.session_state.map = _create_map(
+                            st.session_state.pharmacies,
+                            st.session_state.map_center['lat'],
+                            st.session_state.map_center['lng'],
+                            st.session_state.map_zoom,
+                            selected_pharmacies=st.session_state.selected_pharmacies
+                        )
+                        logger.info(f"Tout cocher : {len(st.session_state.selected_pharmacies)} pharmacies sélectionnées")
+                        st.rerun()
+                with col2:
+                    if st.button("Tout décocher"):
+                        st.session_state.selected_pharmacies = []
+                        st.session_state.selected_pharmacies_key = generate_pharmacies_key([])
+                        st.session_state.map = _create_map(
+                            st.session_state.pharmacies,
+                            st.session_state.map_center['lat'],
+                            st.session_state.map_center['lng'],
+                            st.session_state.map_zoom,
+                            selected_pharmacies=st.session_state.selected_pharmacies
+                        )
+                        logger.info("Tout décocher : aucune pharmacie sélectionnée")
+                        st.rerun()
+            st.markdown("<hr>", unsafe_allow_html=True)
+
+            if st.button("Recalculer"):
+                st.session_state.selected_pharmacies = selected_pharmacies
+                st.session_state.selected_pharmacies_key = generate_pharmacies_key(selected_pharmacies)
                 center_lat = st.session_state.map_center['lat']
                 center_lon = st.session_state.map_center['lng']
-                selected_pharmacies = st.session_state.get("selected_pharmacies", [])
                 st.session_state.map = _create_map(
                     st.session_state.pharmacies, center_lat, center_lon, st.session_state.map_zoom,
                     selected_pharmacies=selected_pharmacies
                 )
-                st.session_state.selected_pharmacies_key = generate_pharmacies_key(selected_pharmacies)
-                logger.info(f"Carte régénérée : {len(st.session_state.pharmacies)} cercles, "
+                logger.info(f"Carte mise à jour après recalcul : {len(st.session_state.pharmacies)} cercles, "
                             f"selected={len(selected_pharmacies)}")
+                st.rerun()
 
-            map_data = st_folium(st.session_state.map, width=MAP_WIDTH, height=MAP_HEIGHT,
-                                 key=f"results_map_{st.session_state.selected_pharmacies_key}")
-            if map_data and "center" in map_data and "zoom" in map_data and map_data["center"] and map_data["zoom"]:
-                st.session_state.map_center = map_data["center"]
-                st.session_state.map_zoom = map_data["zoom"]
-                logger.info(f"Interaction avec la carte : map_center={st.session_state.map_center}, "
-                            f"map_zoom={st.session_state.map_zoom}")
-
-        with st.expander("Pharmacies trouvées", expanded=True):
-            st.markdown(
-                """
-                <style>
-                .pharmacy-list {
-                    max-height: 300px;
-                    overflow-y: auto;
-                    padding: 10px;
-                    border: 1px solid #ccc;
-                    border-radius: 5px;
-                }
-                </style>
-                """,
-                unsafe_allow_html=True
+            df_pharmacies = pd.DataFrame(st.session_state.pharmacies)
+            csv_pharmacies = df_pharmacies.to_csv(index=False)
+            st.download_button(
+                label="Télécharger la liste des pharmacies (CSV)",
+                data=csv_pharmacies,
+                file_name=f"pharmacies_{search_name}.csv",
+                mime="text/csv"
             )
-            with st.container():
-                st.markdown('<div class="pharmacy-list">', unsafe_allow_html=True)
-                selected_pharmacies = []
-                for i, pharmacy in enumerate(st.session_state.pharmacies):
-                    if st.checkbox(pharmacy['name'], key=f"pharmacy_{i}_{st.session_state.selected_pharmacies_key}", value=pharmacy in st.session_state.selected_pharmacies):
-                        selected_pharmacies.append(pharmacy)
-                st.markdown('</div>', unsafe_allow_html=True)
+            map_html = st.session_state.map._repr_html_() if st.session_state.map else ""
+            st.download_button(
+                label="Télécharger la carte (HTML)",
+                data=map_html,
+                file_name=f"pharmacy_coverage_map_{search_name}.html",
+                mime="text/html",
+                disabled=not st.session_state.map
+            )
+            st.markdown("<hr>", unsafe_allow_html=True)
 
-        if st.button("Recalculer"):
-            st.session_state.selected_pharmacies = selected_pharmacies
-            st.session_state.selected_pharmacies_key = generate_pharmacies_key(selected_pharmacies)
-            center_lat = st.session_state.map_center['lat']
-            center_lon = st.session_state.map_center['lng']
+            if st.button("Nouvelle recherche"):
+                app._reset_map_state()
+                st.session_state.page = "Sélection de la zone"
+                st.rerun()
+
+        # Vérifier et créer la carte si nécessaire
+        if not st.session_state.pharmacies or not st.session_state.map_center or 'lat' not in st.session_state.map_center or 'lng' not in st.session_state.map_center:
+            st.error("Erreur : données de la carte manquantes. Retournez à la page de sélection.")
+            logger.error("Données manquantes pour la carte : pharmacies ou map_center")
+            st.session_state.page = "Sélection de la zone"
+            app._reset_map_state()
+            st.rerun()
+            return
+
+        # Créer ou mettre à jour la carte
+        center_lat = st.session_state.map_center['lat']
+        center_lon = st.session_state.map_center['lng']
+        if st.session_state.map is None or not st.session_state.selected_pharmacies_key:
+            if not st.session_state.selected_pharmacies:  # Cocher toutes les pharmacies par défaut
+                st.session_state.selected_pharmacies = st.session_state.pharmacies
+                st.session_state.selected_pharmacies_key = generate_pharmacies_key(st.session_state.pharmacies)
             st.session_state.map = _create_map(
                 st.session_state.pharmacies, center_lat, center_lon, st.session_state.map_zoom,
-                selected_pharmacies=selected_pharmacies
+                selected_pharmacies=st.session_state.selected_pharmacies
             )
-            logger.info(f"Carte mise à jour après recalcul : {len(st.session_state.pharmacies)} cercles, "
-                        f"selected={len(selected_pharmacies)}")
-            st.rerun()
+            logger.info(f"Carte régénérée : {len(st.session_state.pharmacies)} cercles, "
+                        f"selected={len(st.session_state.selected_pharmacies)}")
 
-        df_pharmacies = pd.DataFrame(st.session_state.pharmacies)
-        csv_pharmacies = df_pharmacies.to_csv(index=False)
-        st.download_button(
-            label="Télécharger la liste des pharmacies (CSV)",
-            data=csv_pharmacies,
-            file_name=f"pharmacies_{search_name}.csv",
-            mime="text/csv"
-        )
-        map_html = st.session_state.map._repr_html_() if st.session_state.map else ""
-        st.download_button(
-            label="Télécharger la carte (HTML)",
-            data=map_html,
-            file_name=f"pharmacy_coverage_map_{search_name}.html",
-            mime="text/html",
-            disabled=not st.session_state.map
-        )
-
-        if st.button("Nouvelle recherche"):
-            app._reset_map_state()
-            st.session_state.page = "Sélection de la zone"
-            st.rerun()
+        # Afficher la carte
+        map_data = st_folium(st.session_state.map, width=MAP_WIDTH, height=MAP_HEIGHT, key="results_map")
+        if map_data and isinstance(map_data, dict) and "center" in map_data and "zoom" in map_data and map_data["center"]:
+            st.session_state.map_center = map_data["center"]
+            st.session_state.map_zoom = map_data["zoom"]
+            logger.info(f"Interaction avec la carte : map_center={st.session_state.map_center}, "
+                        f"map_zoom={st.session_state.map_zoom}")
 
 def render_billing_page(app):
     """Afficher la page de facturation."""
@@ -435,17 +525,17 @@ def render_history_page(app):
                         st.session_state.pharmacies = search["pharmacies"]
                         st.session_state.total_requests = search["total_requests"]
                         st.session_state.search_name = search["name"]
+                        st.session_state.selected_pharmacies = search["pharmacies"]  # Cocher par défaut
+                        st.session_state.selected_pharmacies_key = generate_pharmacies_key(search["pharmacies"])
                         st.session_state.map = _create_map(
                             search["pharmacies"],
                             search["center_lat"],
                             search["center_lon"],
                             search["zoom"],
-                            selected_pharmacies=[]
+                            selected_pharmacies=st.session_state.selected_pharmacies
                         )
                         st.session_state.map_center = {'lat': search["center_lat"], 'lng': search["center_lon"]}
                         st.session_state.map_zoom = search["zoom"]
-                        st.session_state.selected_pharmacies = []
-                        st.session_state.selected_pharmacies_key = generate_pharmacies_key([])
                         st.session_state.page = "Résultats"
                         logger.info(f"Transition vers Résultats pour la recherche '{search['name']}'")
                         st.rerun()

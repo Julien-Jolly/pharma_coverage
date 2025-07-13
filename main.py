@@ -79,7 +79,8 @@ class PharmacyApp:
             'selected_pharmacies': [],
             'subarea_step': None,
             'subarea_radius': None,
-            'area_too_large': False
+            'area_too_large': False,
+            'zone_validated': False
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -98,6 +99,7 @@ class PharmacyApp:
         st.session_state.subarea_step = None
         st.session_state.subarea_radius = None
         st.session_state.total_requests = 0
+        st.session_state.zone_validated = False
         st.session_state.map_center = DEFAULT_CENTER
         st.session_state.map_zoom = DEFAULT_ZOOM
         logger.info("État de la carte réinitialisé")
@@ -114,6 +116,8 @@ class PharmacyApp:
                 border-radius: 5px;
                 padding: 10px 20px;
                 font-weight: bold;
+                width: 100%;
+                margin: 5px 0;
             }
             .stButton>button:hover {
                 background-color: #45a049;
@@ -122,13 +126,65 @@ class PharmacyApp:
                 border: 1px solid #ccc;
                 border-radius: 5px;
                 padding: 8px;
+                margin: 5px 0;
             }
             .stRadio>label {
                 font-weight: bold;
             }
-            .sidebar .sidebar-content {
+            .stSidebar .sidebar-content {
                 background-color: #ffffff;
                 border-right: 1px solid #ddd;
+                padding: 15px;
+            }
+            .stSidebar h3 {
+                color: #333;
+                font-family: 'Arial', sans-serif;
+                margin-bottom: 10px;
+            }
+            .stSidebar hr {
+                border: 0;
+                border-top: 1px solid #eee;
+                margin: 10px 0;
+            }
+            .stSidebar .stTextInput>input {
+                border: 2px solid #4CAF50;
+                border-radius: 5px;
+                padding: 10px;
+                margin-bottom: 10px;
+            }
+            .stSidebar .stButton>button {
+                background-color: #4CAF50;
+                color: white;
+                border-radius: 5px;
+                padding: 10px;
+                margin: 5px 0;
+                font-size: 14px;
+            }
+            .stSidebar .stButton>button:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+            .stSidebar .stDownloadButton>button {
+                background-color: #2196F3;
+                color: white;
+                border-radius: 5px;
+                padding: 10px;
+                margin: 5px 0;
+                font-size: 14px;
+            }
+            .stSidebar .stDownloadButton>button:hover {
+                background-color: #1976D2;
+            }
+            .stSidebar .stCheckbox {
+                margin: 5px 0;
+            }
+            .stSidebar .pharmacy-list {
+                max-height: 300px;
+                overflow-y: auto;
+                padding: 10px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                background-color: #f9f9f9;
             }
             h1, h2, h3 {
                 color: #333;
