@@ -7,6 +7,7 @@ __pycache__/
 env/
 venv/
 .env
+.aws/
 
 # Fichiers de configuration locale
 .streamlit/secrets.toml
