@@ -224,15 +224,19 @@ class PharmacyApp:
                 st.session_state.page = new_page
                 st.rerun()
 
-            if st.sidebar.button("Déconnexion"):
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.session_state.is_authenticated = False
-                st.session_state.is_admin = False
-                st.session_state.username = None
-                st.session_state.page = "Connexion"
-                logger.info("Déconnexion effectuée")
-                st.rerun()
+            st.sidebar.markdown("---")
+            with st.sidebar.container():
+                st.markdown("<div style='position: absolute; bottom: 20px; width: 100%;'>", unsafe_allow_html=True)
+                if st.button("Déconnexion"):
+                    for key in list(st.session_state.keys()):
+                        del st.session_state[key]
+                    st.session_state.is_authenticated = False
+                    st.session_state.is_admin = False
+                    st.session_state.username = None
+                    st.session_state.page = "Connexion"
+                    logger.info("Déconnexion effectuée")
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
 
         # Navigation basée sur l'état de la page
         if not st.session_state.is_authenticated:

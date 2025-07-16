@@ -74,19 +74,22 @@ class StorageService:
             st.error("Erreur lors du chargement de l'historique.")
             return []
 
-    def save_search_history(self, search_data):
+    def save_search_history(self, search_data, overwrite=False):
         """Sauvegarde les données de recherche dans search_history.json sur S3."""
         try:
-            from datetime import datetime
-            search_data['timestamp'] = datetime.utcnow().isoformat()
-            history = self.load_search_history()
-            history.append(search_data)
+            if overwrite:
+                history = search_data  # C’est déjà une liste
+            else:
+                from datetime import datetime
+                search_data['timestamp'] = datetime.utcnow().isoformat()
+                history = self.load_search_history()
+                history.append(search_data)
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key="search_history.json",
                 Body=json.dumps(history, indent=2).encode('utf-8')
             )
-            logger.info(f"Recherche sauvegardée : {search_data['name']}")
+            logger.info("Historique de recherche sauvegardé")
         except ClientError as e:
             logger.error(f"Erreur lors de la sauvegarde de l'historique : {e}")
             st.error("Erreur lors de la sauvegarde de l'historique.")

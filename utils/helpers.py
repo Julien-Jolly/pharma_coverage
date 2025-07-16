@@ -13,3 +13,7 @@ def estimate_bounds(center_lat, center_lon, zoom):
 def generate_pharmacies_key(pharmacies):
     """Générer une clé unique pour une liste de pharmacies."""
     return hashlib.md5(str([(p['latitude'], p['longitude'], p['name']) for p in pharmacies]).encode()).hexdigest()
+
+def get_bounds_key(bounds):
+    """Génère une clé unique pour des coordonnées de zone (bounds)."""
+    return hashlib.md5(str(bounds).encode()).hexdigest()
