@@ -17,3 +17,7 @@ def generate_pharmacies_key(pharmacies):
 def get_bounds_key(bounds):
     """Génère une clé unique pour des coordonnées de zone (bounds)."""
     return hashlib.md5(str(bounds).encode()).hexdigest()
+
+def generate_subzone_key(lat, lon, radius):
+    """Génère une clé unique pour une sous-zone avec 5 décimales."""
+    return f"{round(lat, 3):.3f}_{round(lon, 3):.3f}_{radius}"

@@ -1,82 +1,57 @@
 import json
-import hashlib
-import boto3
-import streamlit as st
-from botocore.exceptions import ClientError
+from services.storage_service import StorageService
+from utils.helpers import generate_pharmacies_key
 
-# Chargement des secrets Streamlit
-AWS_ACCESS_KEY_ID = st.secrets["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = st.secrets["AWS_SECRET_ACCESS_KEY"]
-AWS_REGION = st.secrets["AWS_REGION"]
-BUCKET_NAME = st.secrets["S3_BUCKET_NAME"]
+def generate_subzone_key(lat, lon, radius):
+    return f"{round(lat, 5)}_{round(lon, 5)}_{radius}"
 
-# Clés des fichiers dans S3
-HISTORY_KEY = "search_history.json"
-PHARMACY_KEY = "pharmacies.json"
+def initialize_subzones():
+    storage = StorageService()
+    subzones_key = "subzones.json"
 
-# Client S3 authentifié
-s3_client = boto3.client(
-    "s3",
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    region_name=AWS_REGION
-)
-
-def generate_pharmacy_id(pharmacy):
-    raw = f"{pharmacy['name'].strip().lower()}_{pharmacy['latitude']}_{pharmacy['longitude']}"
-    return hashlib.md5(raw.encode()).hexdigest()
-
-def load_json_from_s3(key):
+    # Charger l'existant
     try:
-        response = s3_client.get_object(Bucket=BUCKET_NAME, Key=key)
-        content = response["Body"].read().decode("utf-8")
-        return json.loads(content)
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "NoSuchKey":
-            return []
-        else:
-            raise e
+        response = storage.s3_client.get_object(Bucket=storage.bucket_name, Key=subzones_key)
+        subzones = json.loads(response['Body'].read().decode('utf-8'))
+    except Exception:
+        subzones = {}
 
-def write_json_to_s3(key, data):
-    try:
-        s3_client.put_object(
-            Bucket=BUCKET_NAME,
-            Key=key,
-            Body=json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
-        )
-        print(f"✅ Fichier {key} mis à jour sur S3.")
-    except ClientError as e:
-        print(f"❌ Erreur S3 lors de l’écriture de {key} : {e}")
+    # Charger l’historique existant
+    history = storage.load_search_history()
 
-def migrate():
-    print("📥 Lecture de l'historique depuis S3...")
-    history = load_json_from_s3(HISTORY_KEY)
-    all_pharmacies = {}
+    # Nouveau format d’historique
     new_history = []
 
-    for search in history:
-        pharmacies = search.get("pharmacies", [])
-        pharmacy_ids = []
-        for pharmacy in pharmacies:
-            pid = generate_pharmacy_id(pharmacy)
-            pharmacy_ids.append(pid)
-            if pid not in all_pharmacies:
-                all_pharmacies[pid] = {
-                    "id": pid,
-                    "name": pharmacy["name"],
-                    "latitude": pharmacy["latitude"],
-                    "longitude": pharmacy["longitude"]
-                }
+    for entry in history:
+        if 'pharmacies' in entry:
+            subzones_used = []
+            for pharmacy in entry['pharmacies']:
+                lat, lon = pharmacy['latitude'], pharmacy['longitude']
+                radius = entry.get('subarea_radius', 1000)  # fallback
+                key = generate_subzone_key(lat, lon, radius)
 
-        search["pharmacy_ids"] = pharmacy_ids
-        search.pop("pharmacies", None)
-        new_history.append(search)
+                if key not in subzones:
+                    subzones[key] = []
+                if pharmacy not in subzones[key]:
+                    subzones[key].append(pharmacy)
+                subzones_used.append(key)
 
-    print(f"🧠 {len(all_pharmacies)} pharmacies uniques identifiées")
-    write_json_to_s3(PHARMACY_KEY, {"pharmacies": all_pharmacies})
-    write_json_to_s3(HISTORY_KEY, new_history)
+            # Nettoyage de l’entrée
+            entry.pop("pharmacies", None)
+            entry["subzones_used"] = list(set(subzones_used))
 
-    print("✅ Migration terminée avec succès.")
+        new_history.append(entry)
+
+    # Sauvegarde
+    storage.s3_client.put_object(
+        Bucket=storage.bucket_name,
+        Key="subzones.json",
+        Body=json.dumps(subzones, indent=2).encode('utf-8')
+    )
+    print("✅ subzones.json mis à jour avec toutes les pharmacies groupées par sous-zone.")
+
+    storage.save_search_history(new_history, overwrite=True)
+    print("✅ search_history.json restructuré pour référencer les sous-zones.")
 
 if __name__ == "__main__":
-    migrate()
+    initialize_subzones()

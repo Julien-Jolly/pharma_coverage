@@ -167,3 +167,54 @@ class StorageService:
                 logger.warning(f"Échec de l'enregistrement (tentative {attempt+1}) : {e}")
                 time.sleep(0.5)
         raise Exception("Failed to save request count after retries")
+
+    def load_subzones_cache(self):
+        """Charge le cache des sous-zones depuis subzones.json."""
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key="subzones.json")
+            return json.loads(response['Body'].read().decode('utf-8'))
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
+                logger.warning("subzones.json introuvable, initialisation vide.")
+                return {}
+            logger.error(f"Erreur de chargement subzones.json : {e}")
+            st.error("Erreur lors du chargement du cache de sous-zones.")
+            return {}
+
+    def get_pharmacies_from_subzones(self, subzone_keys: list):
+        """Récupérer les pharmacies associées à une liste de clés de sous-zones depuis le cache."""
+        cache = self.load_subzones_cache()
+        pharmacies = []
+        seen = set()
+
+        for key in subzone_keys:
+            for pharmacy in cache.get(key, []):
+                unique_key = (pharmacy["latitude"], pharmacy["longitude"], pharmacy["name"])
+                if unique_key not in seen:
+                    seen.add(unique_key)
+                    pharmacies.append(pharmacy)
+
+        return pharmacies
+
+    def update_subzone_cache(self, key, pharmacies):
+        """Ajoute ou met à jour une sous-zone dans subzones.json."""
+        cache = self.load_subzones_cache()
+        existing = cache.get(key, [])
+        combined = existing + [p for p in pharmacies if p not in existing]
+        cache[key] = combined
+
+        for attempt in range(3):
+            try:
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key="subzones.json",
+                    Body=json.dumps(cache, indent=2).encode('utf-8')
+                )
+                logger.info(f"Sous-zone {key} mise à jour avec {len(pharmacies)} pharmacies.")
+                return
+            except ClientError as e:
+                logger.warning(f"Erreur tentative {attempt + 1} update subzone {key} : {e}")
+                time.sleep(0.5)
+
+        st.error("Erreur : échec de mise à jour du cache de sous-zones.")
+        raise Exception(f"Failed to update subzone cache for {key}")

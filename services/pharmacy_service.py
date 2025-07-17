@@ -4,6 +4,7 @@ import time
 import logging
 from itertools import product
 import numpy as np
+from utils.helpers import generate_subzone_key
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +100,11 @@ class PharmacyService:
 
         return pharmacies, request_count
 
-    def get_pharmacies_in_area(self, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius):
+    def get_pharmacies_in_area(self, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, storage_service):
         """Collecter les pharmacies dans une zone donnée."""
         try:
-            logger.info(f"Début de la recherche de pharmacies : bounds=({lat_min:.4f}, {lat_max:.4f}, {lon_min:.4f}, {lon_max:.4f}), step={subarea_step}, radius={subarea_radius}")
+            logger.info(
+                f"Début de la recherche de pharmacies : bounds=({lat_min:.4f}, {lat_max:.4f}, {lon_min:.4f}, {lon_max:.4f}), step={subarea_step}, radius={subarea_radius}")
             if not (lat_min < lat_max and lon_min < lon_max):
                 logger.error("Les limites de la zone sont invalides")
                 st.error("Les limites de la zone sont invalides. Vérifiez les coordonnées.")
@@ -117,10 +119,21 @@ class PharmacyService:
             st.write(f"Nombre de sous-zones à traiter : {len(subarea_centers)}")
             logger.info(f"Collecte des pharmacies pour {len(subarea_centers)} sous-zones")
 
+            cache = storage_service.load_subzones_cache()
+
             for center_lat, center_lon in subarea_centers:
-                subarea_pharmacies, request_count = self.get_pharmacies_in_subarea(center_lat, center_lon, subarea_radius)
+                key = generate_subzone_key(center_lat, center_lon, subarea_radius)
+
+                if key in cache:
+                    subarea_pharmacies = cache[key]
+                    logger.info(f"Sous-zone {key} chargée depuis cache ({len(subarea_pharmacies)} pharmacies).")
+                else:
+                    subarea_pharmacies, request_count = self.get_pharmacies_in_subarea(center_lat, center_lon,
+                                                                                       subarea_radius)
+                    storage_service.update_subzone_cache(key, subarea_pharmacies)
+                    total_requests += request_count
+
                 pharmacies.extend(subarea_pharmacies)
-                total_requests += request_count
 
             unique_pharmacies = []
             seen = set()

@@ -6,7 +6,8 @@ from streamlit_folium import st_folium
 import numpy as np
 from datetime import datetime
 import logging
-from utils.helpers import estimate_bounds, generate_pharmacies_key, get_bounds_key
+from utils.helpers import estimate_bounds, generate_pharmacies_key, get_bounds_key, generate_subzone_key
+
 from geopy.geocoders import Nominatim
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
             total_requests = 0
         else:
             pharmacies, total_requests = app.pharmacy_service.get_pharmacies_in_area(
-                lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius
+                lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, app.storage_service
             )
 
         if not pharmacies:
@@ -117,7 +118,10 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
             "search_type": st.session_state.search_type,
             "subarea_step": subarea_step,
             "subarea_radius": subarea_radius,
-            "pharmacies": pharmacies,
+            "subzones_used": list(set(
+                generate_subzone_key(p["latitude"], p["longitude"], subarea_radius)
+                for p in pharmacies
+            )),
             "total_requests": total_requests,
             "map_html": st.session_state.map._repr_html_(),
             "center_lat": center_lat,
@@ -546,13 +550,13 @@ def render_history_page(app):
                             st.session_state.search_type = search["search_type"]
                             st.session_state.subarea_step = search["subarea_step"]
                             st.session_state.subarea_radius = search["subarea_radius"]
-                            st.session_state.pharmacies = search["pharmacies"]
+                            st.session_state.pharmacies = app.storage_service.get_pharmacies_from_subzones(search["subzones_used"])
                             st.session_state.total_requests = search["total_requests"]
                             st.session_state.search_name = search["name"]
-                            st.session_state.selected_pharmacies = search["pharmacies"]  # Cocher par défaut
-                            st.session_state.selected_pharmacies_key = generate_pharmacies_key(search["pharmacies"])
+                            st.session_state.selected_pharmacies = app.storage_service.get_pharmacies_from_subzones(search["subzones_used"])  # Cocher par défaut
+                            st.session_state.selected_pharmacies_key = generate_pharmacies_key(app.storage_service.get_pharmacies_from_subzones(search["subzones_used"]))
                             st.session_state.map = _create_map(
-                                search["pharmacies"],
+                                app.storage_service.get_pharmacies_from_subzones(search["subzones_used"]),
                                 search["center_lat"],
                                 search["center_lon"],
                                 search["zoom"],
@@ -564,7 +568,7 @@ def render_history_page(app):
                             logger.info(f"Transition vers Résultats pour la recherche '{search['name']}'")
                             st.rerun()
                     with col2:
-                        df = pd.DataFrame(search["pharmacies"])
+                        df = pd.DataFrame(app.storage_service.get_pharmacies_from_subzones(search["subzones_used"]))
                         csv = df.to_csv(index=False)
                         st.download_button(
                             label="Télécharger CSV Pharmacies",
@@ -623,18 +627,22 @@ def _render_history_section(app, history, user_id):
         return
 
     for idx, search in enumerate(history):
+        pharmacies = app.storage_service.get_pharmacies_from_subzones(search.get("subzones_used", []))
+
         with st.expander(f"Recherche : {search['name']} (Type : {search['search_type']})"):
             st.write(f"Date : {search.get('timestamp', 'Inconnue')}")
-            st.write(f"Nombre de pharmacies : {len(search['pharmacies'])}")
+            st.write(f"Nombre de pharmacies : {len(pharmacies)}")
             if st.session_state.is_admin:
                 st.write(f"Utilisateur : {search.get('user_id', '-')}")
-                st.write(f"Requêtes API : {search['total_requests']}")
+                st.write(f"Requêtes API : {search.get('total_requests', 0)}")
+
             if 'map_html' in search and search['map_html']:
                 st.components.v1.html(search['map_html'], width=MINI_MAP_WIDTH, height=MINI_MAP_HEIGHT)
             else:
                 st.warning("Carte non disponible pour cette recherche.")
 
             col1, col2, col3 = st.columns([1, 1, 1])
+
             with col1:
                 if st.button("Visualiser", key=f"view_{search['name']}_{idx}"):
                     logger.info(f"Visualisation de l'historique {search['name']}")
@@ -642,24 +650,25 @@ def _render_history_section(app, history, user_id):
                     st.session_state.search_type = search["search_type"]
                     st.session_state.subarea_step = search["subarea_step"]
                     st.session_state.subarea_radius = search["subarea_radius"]
-                    st.session_state.pharmacies = search["pharmacies"]
-                    st.session_state.total_requests = search["total_requests"]
+                    st.session_state.pharmacies = pharmacies
+                    st.session_state.total_requests = search.get("total_requests", 0)
                     st.session_state.search_name = search["name"]
-                    st.session_state.selected_pharmacies = search["pharmacies"]
-                    st.session_state.selected_pharmacies_key = generate_pharmacies_key(search["pharmacies"])
+                    st.session_state.selected_pharmacies = pharmacies
+                    st.session_state.selected_pharmacies_key = generate_pharmacies_key(pharmacies)
                     st.session_state.map = _create_map(
-                        search["pharmacies"],
+                        pharmacies,
                         search["center_lat"],
                         search["center_lon"],
                         search["zoom"],
-                        selected_pharmacies=st.session_state.selected_pharmacies
+                        selected_pharmacies=pharmacies
                     )
                     st.session_state.map_center = {'lat': search["center_lat"], 'lng': search["center_lon"]}
                     st.session_state.map_zoom = search["zoom"]
                     st.session_state.page = "Résultats"
                     st.rerun()
+
             with col2:
-                df = pd.DataFrame(search["pharmacies"])
+                df = pd.DataFrame(pharmacies)
                 csv = df.to_csv(index=False)
                 st.download_button(
                     label="Télécharger CSV",
@@ -668,6 +677,7 @@ def _render_history_section(app, history, user_id):
                     mime="text/csv",
                     key=f"csv_{search['name']}_{idx}"
                 )
+
             with col3:
                 if st.button("Supprimer", key=f"delete_{search['name']}_{idx}"):
                     full = app.storage_service.load_search_history()
