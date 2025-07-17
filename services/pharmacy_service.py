@@ -145,7 +145,16 @@ class PharmacyService:
 
             st.write(f"Nombre total de requêtes effectuées pour la collecte : {total_requests}")
             logger.info(f"Collecte terminée : {len(unique_pharmacies)} pharmacies uniques, {total_requests} requêtes")
-            return unique_pharmacies, total_requests
+
+            filtered_pharmacies = [
+                p for p in unique_pharmacies
+                if lat_min <= p["latitude"] <= lat_max and lon_min <= p["longitude"] <= lon_max
+            ]
+
+            logger.info(
+                f"{len(filtered_pharmacies)} pharmacies conservées après filtrage sur la zone sélectionnée ({lat_min}, {lat_max}, {lon_min}, {lon_max})")
+
+            return filtered_pharmacies, total_requests
 
         except Exception as e:
             st.error(f"Erreur inattendue lors de la recherche des pharmacies : {e}")

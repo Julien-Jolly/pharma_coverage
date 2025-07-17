@@ -40,12 +40,17 @@ def _geocode_location(location):
         logger.error(f"Erreur de géocodage pour {location} : {e}")
         return None
 
-def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, height=MAP_HEIGHT, selected_pharmacies=None):
-    """Créer une carte Folium avec des cercles pour les pharmacies."""
+def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, height=MAP_HEIGHT, selected_pharmacies=None, subzones=None):
+    """Créer une carte Folium avec cercles et grille de sous-zones."""
     m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, width=width, height=height)
     selected_pharmacies = selected_pharmacies or []
+
+    # Cercles des pharmacies
     for pharmacy in pharmacies:
-        is_selected = any(p['name'] == pharmacy['name'] and p['latitude'] == pharmacy['latitude'] and p['longitude'] == pharmacy['longitude'] for p in selected_pharmacies)
+        is_selected = any(
+            p['name'] == pharmacy['name'] and p['latitude'] == pharmacy['latitude'] and p['longitude'] == pharmacy['longitude']
+            for p in selected_pharmacies
+        )
         folium.Circle(
             location=[pharmacy['latitude'], pharmacy['longitude']],
             radius=CIRCLE_RADIUS,
@@ -56,8 +61,24 @@ def _create_map(pharmacies, center_lat, center_lon, zoom, width=MAP_WIDTH, heigh
             opacity=CIRCLE_OPACITY,
             popup=pharmacy['name']
         ).add_to(m)
-    logger.info(f"Carte créée : {len(pharmacies)} cercles, center=({center_lat:.4f}, {center_lon:.4f}), zoom={zoom}")
+
+    if subzones:
+        for sz in subzones:
+            bounds = [
+                [sz["lat_min"], sz["lon_min"]],
+                [sz["lat_max"], sz["lon_max"]]
+            ]
+            folium.Rectangle(
+                bounds=bounds,
+                color="gray",
+                fill=False,
+                weight=1,
+                tooltip=f"Sous-zone : {sz.get('key', '')}"
+            ).add_to(m)
+
+    logger.info(f"Carte créée : {len(pharmacies)} cercles, {len(subzones or [])} rectangles de sous-zones")
     return m
+
 
 def _calculate_area_km2(lat_min, lat_max, lon_min, lon_max):
     """Calculer la superficie de la zone en km²."""
@@ -67,7 +88,6 @@ def _calculate_area_km2(lat_min, lat_max, lon_min, lon_max):
     return area
 
 def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, search_name, user_id):
-    """Traiter la recherche de pharmacies avec cache mutualisé."""
     logger.info(f"Lancement de la recherche : name={search_name}, user_id={user_id}, step={subarea_step}, radius={subarea_radius}")
     try:
         bounds = (lat_min, lat_max, lon_min, lon_max)
@@ -79,18 +99,9 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
         st.session_state.search_in_progress = True
         st.sidebar.write("Recherche en cours...")
 
-        # Mutualisation : vérifier si la zone a déjà été traitée
-        full_history = app.storage_service.load_search_history()
-        cached_result = next((s for s in full_history if s.get("bounds_hash") == bounds_key), None)
-
-        if cached_result:
-            logger.info(f"Utilisation du cache existant pour la zone : {bounds_key}")
-            pharmacies = cached_result["pharmacies"]
-            total_requests = 0
-        else:
-            pharmacies, total_requests = app.pharmacy_service.get_pharmacies_in_area(
-                lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, app.storage_service
-            )
+        pharmacies, total_requests = app.pharmacy_service.get_pharmacies_in_area(
+            lat_min, lat_max, lon_min, lon_max, subarea_step, subarea_radius, app.storage_service
+        )
 
         if not pharmacies:
             st.sidebar.error("Aucune pharmacie trouvée. Vérifiez votre clé API ou la zone.")
@@ -104,10 +115,27 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
         st.session_state.total_requests = total_requests
         st.session_state.selected_pharmacies = pharmacies
         st.session_state.selected_pharmacies_key = generate_pharmacies_key(pharmacies)
+
+        st.session_state.subzones_display = [
+            {
+                "lat_min": sz_lat,
+                "lat_max": sz_lat + subarea_step,
+                "lon_min": sz_lon,
+                "lon_max": sz_lon + subarea_step,
+                "key": generate_subzone_key(sz_lat, sz_lon, subarea_radius)
+            }
+            for sz_lat, sz_lon in product(
+                np.arange(lat_min, lat_max, subarea_step),
+                np.arange(lon_min, lon_max, subarea_step)
+            )
+        ]
+
         st.session_state.map = _create_map(
             pharmacies, center_lat, center_lon, st.session_state.map_zoom,
-            selected_pharmacies=st.session_state.selected_pharmacies
+            selected_pharmacies=st.session_state.selected_pharmacies,
+            subzones=st.session_state.subzones_display
         )
+
         st.session_state.map_center = {'lat': center_lat, 'lng': center_lon}
 
         search_data = {
@@ -123,7 +151,7 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
                 for p in pharmacies
             )),
             "total_requests": total_requests,
-            "map_html": st.session_state.map._repr_html_(),
+            "map_html": st.session_state.map._repr_html_() if hasattr(st.session_state.map, "_repr_html_") else "",
             "center_lat": center_lat,
             "center_lon": center_lon,
             "zoom": st.session_state.map_zoom
@@ -141,7 +169,6 @@ def _process_search(app, lat_min, lat_max, lon_min, lon_max, subarea_step, subar
                 _reset_search()
                 return
 
-        # Incrément du compteur de requêtes uniquement si appel API
         if total_requests > 0:
             app.storage_service.increment_total_requests(user_id, total_requests)
 
