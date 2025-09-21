@@ -86,8 +86,19 @@ class PharmacyApp:
             if key not in st.session_state:
                 st.session_state[key] = value
 
-    def _reset_map_state(self):
-        """Réinitialiser les variables de session liées à la carte."""
+    def _reset_map_state(self, keep_view: bool = False):
+        """Réinitialiser les variables de session liées à la carte.
+        keep_view=True => conserve map_center/map_zoom courants pendant la session.
+        """
+        # Conserver ou réinitialiser la vue
+        if keep_view:
+            center = st.session_state.get('map_center', DEFAULT_CENTER)
+            zoom = st.session_state.get('map_zoom', DEFAULT_ZOOM)
+        else:
+            center = DEFAULT_CENTER
+            zoom = DEFAULT_ZOOM
+
+        # Reset du reste de l'état carte/recherche
         st.session_state.map = None
         st.session_state.bounds = None
         st.session_state.area_too_large = False
@@ -100,9 +111,15 @@ class PharmacyApp:
         st.session_state.subarea_radius = None
         st.session_state.total_requests = 0
         st.session_state.zone_validated = False
-        st.session_state.map_center = DEFAULT_CENTER
-        st.session_state.map_zoom = DEFAULT_ZOOM
-        logger.info("État de la carte réinitialisé")
+
+        # Réappliquer center/zoom choisis
+        st.session_state.map_center = center
+        st.session_state.map_zoom = zoom
+
+        logger.info(
+            f"État de la carte réinitialisé (keep_view={keep_view}) ; "
+            f"center={st.session_state.map_center}, zoom={st.session_state.map_zoom}"
+        )
 
     def run(self):
         """Lancer l'application avec navigation et gestion de l'état."""
@@ -220,7 +237,8 @@ class PharmacyApp:
             if new_page != current_page:
                 logger.info(f"Tentative de changement de page : de {current_page} à {new_page}")
                 if new_page == "Sélection de la zone":
-                    self._reset_map_state()
+                    # 👉 Conserver la dernière vue (center/zoom) pendant la session
+                    self._reset_map_state(keep_view=True)
                 st.session_state.page = new_page
                 st.rerun()
 
