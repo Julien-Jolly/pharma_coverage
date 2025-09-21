@@ -435,6 +435,20 @@ def render_results_page(app):
                     for i, pharmacy in enumerate(st.session_state.pharmacies):
                         if st.checkbox(pharmacy['name'], key=f"pharmacy_{i}_{st.session_state.selected_pharmacies_key}", value=pharmacy in st.session_state.selected_pharmacies):
                             selected_pharmacies.append(pharmacy)
+
+                    if selected_pharmacies != st.session_state.selected_pharmacies:
+                        # Met à jour l'état
+                        st.session_state.selected_pharmacies = selected_pharmacies
+                        st.session_state.selected_pharmacies_key = generate_pharmacies_key(selected_pharmacies)
+
+                        # Régénère la carte immédiatement avec le bon remplissage
+                        st.session_state.map = _create_map(
+                            st.session_state.pharmacies,
+                            st.session_state.map_center['lat'],
+                            st.session_state.map_center['lng'],
+                            st.session_state.map_zoom,
+                            selected_pharmacies=st.session_state.selected_pharmacies
+                        )
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 col1, col2 = st.columns(2)
@@ -535,75 +549,28 @@ def render_history_page(app):
     with st.container():
         st.header("Historique des recherches")
         logger.info("Affichage de la page Historique des recherches")
-        search_history = None
 
         if st.session_state.is_admin:
             tab1, tab2 = st.tabs(["Mes recherches", "Recherches des utilisateurs"])
+
             with tab1:
                 admin_history = [h for h in app.storage_service.load_search_history("admin")]
                 _render_history_section(app, admin_history, user_id="admin")
+
             with tab2:
                 other_history = [h for h in app.storage_service.load_search_history() if h.get("user_id") != "admin"]
                 _render_history_section(app, other_history, user_id="*")
+
         else:
             user_id = st.session_state.username
-            search_history = app.storage_service.load_search_history(user_id)
-            _render_history_section(app, search_history, user_id=user_id)
+            user_history = app.storage_service.load_search_history(user_id)
 
-        if not st.session_state.is_admin and search_history:
-            st.subheader(f"Historique pour {user_id}")
-        elif not st.session_state.is_admin and not search_history:
-            st.info("Aucun historique de recherche disponible pour cet utilisateur.")
-            logger.info("Aucun historique de recherche à afficher")
-
-        if search_history:
-            for idx, search in enumerate(search_history):
-                with st.expander(f"Recherche : {search['name']} (Type : {search['search_type']})"):
-                    st.write(f"Date : {search.get('timestamp', 'Inconnue')}")
-                    st.write(f"Nombre de pharmacies : {len(search['pharmacies'])}")
-                    if st.session_state.is_admin:
-                        st.write(f"Requêtes API : {search['total_requests']}")
-                    if 'map_html' in search and search['map_html']:
-                        st.components.v1.html(search['map_html'], width=MINI_MAP_WIDTH, height=MINI_MAP_HEIGHT)
-                    else:
-                        st.warning("Carte non disponible pour cette recherche.")
-                        logger.warning(f"map_html manquant pour la recherche {search['name']}")
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("Visualiser", key=f"view_{search['name']}_{idx}"):
-                            logger.info(f"Clic sur Visualiser pour la recherche '{search['name']}'")
-                            st.session_state.bounds = search["bounds"]
-                            st.session_state.search_type = search["search_type"]
-                            st.session_state.subarea_step = search["subarea_step"]
-                            st.session_state.subarea_radius = search["subarea_radius"]
-                            st.session_state.pharmacies = app.storage_service.get_pharmacies_from_subzones(search["subzones_used"])
-                            st.session_state.total_requests = search["total_requests"]
-                            st.session_state.search_name = search["name"]
-                            st.session_state.selected_pharmacies = app.storage_service.get_pharmacies_from_subzones(search["subzones_used"])  # Cocher par défaut
-                            st.session_state.selected_pharmacies_key = generate_pharmacies_key(app.storage_service.get_pharmacies_from_subzones(search["subzones_used"]))
-                            st.session_state.map = _create_map(
-                                app.storage_service.get_pharmacies_from_subzones(search["subzones_used"]),
-                                search["center_lat"],
-                                search["center_lon"],
-                                search["zoom"],
-                                selected_pharmacies=st.session_state.selected_pharmacies
-                            )
-                            st.session_state.map_center = {'lat': search["center_lat"], 'lng': search["center_lon"]}
-                            st.session_state.map_zoom = search["zoom"]
-                            st.session_state.page = "Résultats"
-                            logger.info(f"Transition vers Résultats pour la recherche '{search['name']}'")
-                            st.rerun()
-                    with col2:
-                        df = pd.DataFrame(app.storage_service.get_pharmacies_from_subzones(search["subzones_used"]))
-                        csv = df.to_csv(index=False)
-                        st.download_button(
-                            label="Télécharger CSV Pharmacies",
-                            data=csv,
-                            file_name=f"pharmacies_{search['name']}.csv",
-                            mime="text/csv",
-                            key=f"csv_pharmacies_{search['name']}_{idx}"
-                        )
+            if user_history:
+                st.subheader(f"Historique pour {user_id}")
+                _render_history_section(app, user_history, user_id=user_id)
+            else:
+                st.info("Aucun historique de recherche disponible pour cet utilisateur.")
+                logger.info("Aucun historique de recherche à afficher")
 
 def render_user_management_page(app):
     """Afficher la page de gestion des utilisateurs."""
